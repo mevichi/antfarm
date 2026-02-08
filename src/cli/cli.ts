@@ -5,7 +5,7 @@ import { getWorkflowStatus, listRuns } from "../installer/status.js";
 import { runWorkflow } from "../installer/run.js";
 import { listBundledWorkflows } from "../installer/workflow-fetch.js";
 import { readRecentLogs } from "../lib/logger.js";
-import { startDashboard } from "../server/dashboard.js";
+import { startDaemon, stopDaemon, getDaemonStatus, isRunning } from "../server/daemonctl.js";
 
 function printUsage() {
   process.stdout.write(
@@ -20,7 +20,9 @@ function printUsage() {
       "antfarm workflow status <query>      Check run status (task substring, run ID prefix)",
       "antfarm workflow runs                List all workflow runs",
       "",
-      "antfarm dashboard [<port>]            Start web dashboard (default: 3333)",
+      "antfarm dashboard [start] [--port N]   Start dashboard daemon (default: 3333)",
+      "antfarm dashboard stop                  Stop dashboard daemon",
+      "antfarm dashboard status                Check dashboard status",
       "",
       "antfarm logs [<lines>]               Show recent log entries",
     ].join("\n") + "\n",
@@ -45,16 +47,64 @@ async function main() {
       }
     }
     console.log(`\nDone. Start a workflow with: antfarm workflow run <name> "your task"`);
+
+    // Auto-start dashboard if not already running
+    if (!isRunning().running) {
+      try {
+        const result = await startDaemon(3333);
+        console.log(`\nDashboard started (PID ${result.pid}): http://localhost:${result.port}`);
+      } catch (err) {
+        console.log(`\nNote: Could not start dashboard: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      console.log("\nDashboard already running.");
+    }
     return;
   }
 
   if (group === "dashboard") {
-    const port = parseInt(args[1], 10) || 3333;
-    startDashboard(port);
-    // Try to open browser
-    const { exec: execCmd } = await import("node:child_process");
-    const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-    execCmd(`${openCmd} http://localhost:${port}`, () => {});
+    const sub = args[1];
+
+    if (sub === "stop") {
+      if (stopDaemon()) {
+        console.log("Dashboard stopped.");
+      } else {
+        console.log("Dashboard is not running.");
+      }
+      return;
+    }
+
+    if (sub === "status") {
+      const st = getDaemonStatus();
+      if (st && st.running) {
+        console.log(`Dashboard running (PID ${st.pid ?? "unknown"})`);
+      } else {
+        console.log("Dashboard is not running.");
+      }
+      return;
+    }
+
+    // start (explicit or implicit)
+    let port = 3333;
+    const portIdx = args.indexOf("--port");
+    if (portIdx !== -1 && args[portIdx + 1]) {
+      port = parseInt(args[portIdx + 1], 10) || 3333;
+    } else if (sub && sub !== "start" && !sub.startsWith("-")) {
+      // legacy: antfarm dashboard 4000
+      const parsed = parseInt(sub, 10);
+      if (!Number.isNaN(parsed)) port = parsed;
+    }
+
+    if (isRunning().running) {
+      const status = getDaemonStatus();
+      console.log(`Dashboard already running (PID ${status?.pid})`);
+      console.log(`  http://localhost:${port}`);
+      return;
+    }
+
+    const result = await startDaemon(port);
+    console.log(`Dashboard started (PID ${result.pid})`);
+    console.log(`  http://localhost:${result.port}`);
     return;
   }
 
