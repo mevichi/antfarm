@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { teardownWorkflowCronsIfIdle } from "./agent-cron.js";
 import { emitEvent } from "./events.js";
 import { logger } from "../lib/logger.js";
+import { wakeNextAgent } from "./immediate-trigger.js";
 
 /**
  * Fire-and-forget cron teardown when a run ends.
@@ -494,6 +495,8 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
         db.prepare(
           "UPDATE steps SET status = 'running', updated_at = datetime('now') WHERE id = ?"
         ).run(step.id);
+        // 🚀 Immediately wake the verify agent
+        wakeNextAgent(step.run_id);
         return { advanced: false, runCompleted: false };
       }
     }
@@ -620,6 +623,8 @@ function checkLoopContinuation(runId: string, loopStepId: string): { advanced: b
     db.prepare(
       "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
     ).run(loopStepId);
+    // 🚀 Immediately wake the loop agent for next story
+    wakeNextAgent(runId);
     return { advanced: false, runCompleted: false };
   }
 
@@ -673,6 +678,8 @@ function advancePipeline(runId: string): { advanced: boolean; runCompleted: bool
     ).run(next.id);
     emitEvent({ ts: new Date().toISOString(), event: "pipeline.advanced", runId, workflowId: wfId, stepId: next.id });
     emitEvent({ ts: new Date().toISOString(), event: "step.pending", runId, workflowId: wfId, stepId: next.id });
+    // 🚀 Immediately wake the next agent
+    wakeNextAgent(runId);
     return { advanced: true, runCompleted: false };
   } else {
     db.prepare(
